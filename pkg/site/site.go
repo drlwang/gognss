@@ -60,7 +60,7 @@ type FormInformation struct {
 // Identification holds common fields about this site.
 type Identification struct {
 	Name                   string    `json:"siteName" validate:"required"`                        // City or nearest town
-	FourCharacterID        string    `json:"fourCharacterId"`                                     // deprecated, use NineCharacterID
+	FourCharacterID        string    `json:"fourCharacterId"`                                     // Deprecated: use NineCharacterID
 	NineCharacterID        string    `json:"nineCharacterId" validate:"omitempty,alphanum,len=9"` // or store singel fields? ID
 	MonumentInscription    string    `json:"monumentInscription"`                                 //
 	DOMESNumber            string    `json:"iersDOMESNumber"`                                     // IERS Domes number, A9
@@ -84,7 +84,7 @@ type Identification struct {
 type Location struct {
 	City                string              `json:"city"`
 	State               string              `json:"state"`
-	Country             string              `json:"country"`
+	Country             string              `json:"country"` // The 3-char country code is prefered.
 	TectonicPlate       string              `json:"tectonicPlate"`
 	ApproximatePosition ApproximatePosition `json:"approximatePosition" validate:"required"` // ITRF
 	Notes               string              `json:"notes"`
@@ -92,8 +92,8 @@ type Location struct {
 
 // CartesianPosition is a point specified by its XYZ-coordinates.
 type CartesianPosition struct {
-	Type        string     `json:"type"` // "Point"
-	Coordinates [3]float64 `json:"coordinates"`
+	Type        string     `json:"type"`        // "Point"
+	Coordinates [3]float64 `json:"coordinates"` // The XYZ-coordinates.
 }
 
 // NewCartesianPosition inits a Cartesian Point Position.
@@ -562,7 +562,6 @@ func (s *Site) StationInfo() ([]StationInfo, error) {
 	}
 
 	for ir, recv := range s.Receivers {
-
 		nextRecv := func() *gnss.Receiver {
 			if ir+1 < nReceivers {
 				return s.Receivers[ir+1]
@@ -580,7 +579,6 @@ func (s *Site) StationInfo() ([]StationInfo, error) {
 		}
 
 		for ia, ant := range s.Antennas {
-
 			antEnd := ant.DateRemoved
 			if antEnd.IsZero() {
 				antEnd = dateInfinite
@@ -630,6 +628,21 @@ func (s *Site) StationInfo() ([]StationInfo, error) {
 	}
 
 	return staHistory, nil
+}
+
+// GetResponsibleAgency returns the responsible agency for questions about the operation of the site,
+// regarding site log or RINEX errors etc.
+// In the sitelog this is section "12. Responsible Agency" if available. If not available, return the "11. On-Site Point of Contact".
+func (s *Site) GetResponsibleAgency() (Party, error) {
+	if len(s.ResponsibleAgencies) > 0 && s.ResponsibleAgencies[0].Party.IndividualName != "" {
+		return s.ResponsibleAgencies[0].Party, nil
+	}
+
+	if len(s.Contacts) > 0 && s.Contacts[0].Party.IndividualName != "" {
+		return s.Contacts[0].Party, nil
+	}
+
+	return Party{}, fmt.Errorf("no responsible agency found")
 }
 
 // StationInfo represents the receiver and antenna state for a time range.
@@ -705,7 +718,7 @@ func (sites *Sites) WriteBerneseSTA(w io.Writer, fmtVers string) error {
 	} else if fmtVers == "1.03" {
 		templ = bernStaTemplv103
 	} else {
-		return fmt.Errorf("write Bernese STA: format version sot supported: " + fmtVers)
+		return fmt.Errorf("write Bernese STA: format version sot supported: %q", fmtVers)
 	}
 	t := template.Must(template.New("stafile").Funcs(tmplFuncMap).Parse(templ))
 	return t.Execute(w, sites)

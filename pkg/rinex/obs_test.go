@@ -1,6 +1,7 @@
 package rinex
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -81,10 +82,12 @@ func TestBuildFilename(t *testing.T) {
 		FilePeriod: FilePeriodHourly, DataFreq: "30S", DataType: "MO", Format: "rnx"}}
 
 	assert.NotNil(rnx)
-	rnx.SetStationName("WTZR")
+	err := rnx.SetStationName("WTZR")
+	assert.NoError(err)
 	assert.Equal("WTZR", rnx.FourCharID, "FourCharID")
 
-	rnx.SetStationName("BRUX00BEL")
+	err = rnx.SetStationName("BRUX00BEL")
+	assert.NoError(err)
 	assert.Equal("BRUX", rnx.FourCharID, "FourCharID")
 	assert.Equal(0, rnx.MonumentNumber, "MonumentNumber")
 	assert.Equal(0, rnx.ReceiverNumber, "ReceiverNumber")
@@ -153,11 +156,11 @@ func TestObsFile_ComputeObsStats(t *testing.T) {
 		fmt.Printf("%s: %+v\n", prn, stat.ObsPerSat[prn])
 	}
 
-	assert.Equal(map[ObsCode]int{"C1C": 7, "C5Q": 7, "C7Q": 7, "C8Q": 7, "D1C": 7, "D5Q": 7, "D7Q": 7, "D8Q": 7, "L1C": 7, "L5Q": 7, "L7Q": 7, "L8Q": 7, "S1C": 7, "S5Q": 7, "S7Q": 7, "S8Q": 7}, stat.ObsPerSat[gnss.PRN{Sys: sysPerAbbr["E"], Num: 7}], "obs E07")
-	assert.Equal(map[ObsCode]int{"C1C": 120, "C2S": 0, "C2W": 120, "C5Q": 0, "D1C": 120, "D2S": 0, "D2W": 120, "D5Q": 0, "L1C": 120, "L2S": 0, "L2W": 120, "L5Q": 0, "S1C": 120, "S2S": 0, "S2W": 120, "S5Q": 0}, stat.ObsPerSat[gnss.PRN{Sys: sysPerAbbr["G"], Num: 11}], "obs G11")
-	assert.Equal(map[ObsCode]int{"C5A": 119, "D5A": 119, "L5A": 72, "S5A": 119}, stat.ObsPerSat[gnss.PRN{Sys: sysPerAbbr["I"], Num: 6}], "obs I06")
-	assert.Equal(map[ObsCode]int{"C1C": 94, "C2C": 94, "C2P": 94, "D1C": 94, "D2C": 94, "D2P": 94, "L1C": 92, "L2C": 92, "L2P": 92, "S1C": 94, "S2C": 94, "S2P": 94}, stat.ObsPerSat[gnss.PRN{Sys: sysPerAbbr["R"], Num: 19}], "obs R19")
-	assert.Equal(map[ObsCode]int{"C2I": 117, "C7I": 0, "D2I": 117, "D7I": 0, "L2I": 116, "L7I": 0, "S2I": 117, "S7I": 0}, stat.ObsPerSat[gnss.PRN{Sys: sysPerAbbr["C"], Num: 22}], "obs C22")
+	assert.Equal(map[ObsCode]int{"C1C": 7, "C5Q": 7, "C7Q": 7, "C8Q": 7, "D1C": 7, "D5Q": 7, "D7Q": 7, "D8Q": 7, "L1C": 7, "L5Q": 7, "L7Q": 7, "L8Q": 7, "S1C": 7, "S5Q": 7, "S7Q": 7, "S8Q": 7}, stat.ObsPerSat[gnss.PRN{Sys: gnss.ByAbbr["E"], Num: 7}], "obs E07")
+	assert.Equal(map[ObsCode]int{"C1C": 120, "C2S": 0, "C2W": 120, "C5Q": 0, "D1C": 120, "D2S": 0, "D2W": 120, "D5Q": 0, "L1C": 120, "L2S": 0, "L2W": 120, "L5Q": 0, "S1C": 120, "S2S": 0, "S2W": 120, "S5Q": 0}, stat.ObsPerSat[gnss.PRN{Sys: gnss.ByAbbr["G"], Num: 11}], "obs G11")
+	assert.Equal(map[ObsCode]int{"C5A": 119, "D5A": 119, "L5A": 72, "S5A": 119}, stat.ObsPerSat[gnss.PRN{Sys: gnss.ByAbbr["I"], Num: 6}], "obs I06")
+	assert.Equal(map[ObsCode]int{"C1C": 94, "C2C": 94, "C2P": 94, "D1C": 94, "D2C": 94, "D2P": 94, "L1C": 92, "L2C": 92, "L2P": 92, "S1C": 94, "S2C": 94, "S2P": 94}, stat.ObsPerSat[gnss.PRN{Sys: gnss.ByAbbr["R"], Num: 19}], "obs R19")
+	assert.Equal(map[ObsCode]int{"C2I": 117, "C7I": 0, "D2I": 117, "D7I": 0, "L2I": 116, "L7I": 0, "S2I": 117, "S7I": 0}, stat.ObsPerSat[gnss.PRN{Sys: gnss.ByAbbr["C"], Num: 22}], "obs C22")
 }
 
 func TestObsFile_ComputeObsStatsV211(t *testing.T) {
@@ -190,7 +193,7 @@ func TestObsFile_ComputeObsStatsV211(t *testing.T) {
 	//STO BRST G G02   120     0     0   120   119     0   120   119     0   119   120   119     0
 
 	//C1:120 C2:0 C5:0 C7:0 C8:0 D1:120 D2:119 D5:0 D7:0 D8:0 L1:120 L2:119 L5:0 L7:0 L8:0 P1:0 P2:119 S1:120 S2:119 S5:0 S7:0 S8:0
-	//assert.Equal(map[ObsCode]int{"C1C": 7, "C5Q": 7, "C7Q": 7, "C8Q": 7, "D1C": 7, "D5Q": 7, "D7Q": 7, "D8Q": 7, "L1C": 7, "L5Q": 7, "L7Q": 7, "L8Q": 7, "S1C": 7, "S5Q": 7, "S7Q": 7, "S8Q": 7}, stat.Obsstats[PRN{Sys: sysPerAbbr["E"], Num: 7}], "obs E07")
+	//assert.Equal(map[ObsCode]int{"C1C": 7, "C5Q": 7, "C7Q": 7, "C8Q": 7, "D1C": 7, "D5Q": 7, "D7Q": 7, "D8Q": 7, "L1C": 7, "L5Q": 7, "L7Q": 7, "L8Q": 7, "S1C": 7, "S5Q": 7, "S7Q": 7, "S8Q": 7}, stat.Obsstats[PRN{Sys: gnss.GNSSForAbbr["E"], Num: 7}], "obs E07")
 }
 
 func TestObsFile_ComputeObsStatsV2(t *testing.T) {
@@ -377,10 +380,206 @@ func copyFile(src, dst string) (int64, error) {
 	return nBytes, err
 }
 
-/* func getHomeDir() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		panic("could not get homeDir")
+func TestObsHeader_Write(t *testing.T) {
+	const headerW = `     3.03           OBSERVATION DATA    M                   RINEX VERSION / TYPE
+sbf2rin-12.3.1                          20181106 200225 UTC PGM / RUN BY / DATE
+SEPTENTRIO RECEIVERS OUTPUT ALIGNED CARRIER PHASES.         COMMENT
+NO FURTHER PHASE SHIFT APPLIED IN THE RINEX ENCODER.        COMMENT
+BRUX                                                        MARKER NAME
+13101M010                                                   MARKER NUMBER
+GEODETIC                                                    MARKER TYPE
+ROB                 ROB                                     OBSERVER / AGENCY
+3001376             SEPT POLARX4TR      2.9.6               REC # / TYPE / VERS
+00464               JAVRINGANT_DM   NONE                    ANT # / TYPE
+  4027881.8478   306998.2610  4919498.6554                  APPROX POSITION XYZ
+        0.4689        0.0000        0.0010                  ANTENNA: DELTA H/E/N
+    30.000                                                  INTERVAL
+  2018    11     6    19     0    0.0000000     GPS         TIME OF FIRST OBS
+  2018    11     6    19    59   30.0000000     GPS         TIME OF LAST OBS
+ 11 R03  5 R04  6 R05  1 R06 -4 R13 -2 R14 -7 R15  0 R16 -1 GLONASS SLOT / FRQ #
+    R22 -3 R23  3 R24  2                                    GLONASS SLOT / FRQ #
+                                                            END OF HEADER
+`
+	type fields struct {
+		RINEXVersion    float32
+		RINEXType       string
+		SatSystem       gnss.System
+		Pgm             string
+		RunBy           string
+		Date            time.Time
+		Comments        []string
+		MarkerName      string
+		MarkerNumber    string
+		MarkerType      string
+		Observer        string
+		Agency          string
+		ReceiverNumber  string
+		ReceiverType    string
+		ReceiverVersion string
+		AntennaNumber   string
+		AntennaType     string
+		Position        Coord
+		AntennaDelta    CoordNEU
+		DOI             string
+		License         string
+		StationInfos    []string
+		//ObsTypes           map[gnss.System][]ObsCode skip test because of sorting. See test below.
+		SignalStrengthUnit string
+		Interval           float64
+		TimeOfFirstObs     time.Time
+		TimeOfLastObs      time.Time
+		GloSlots           map[gnss.PRN]int
+		LeapSeconds        int
+		NSatellites        int
+		Labels             []string
 	}
-	return homeDir
-} */
+
+	tests := []struct {
+		name    string
+		fields  fields
+		wantW   string
+		wantErr bool
+	}{
+		{name: "t1", fields: fields{RINEXVersion: 3.03, SatSystem: gnss.SysMIXED,
+			Pgm: "sbf2rin-12.3.1", Date: time.Date(2018, 11, 6, 20, 2, 25, 0, time.UTC),
+			Comments:   []string{"SEPTENTRIO RECEIVERS OUTPUT ALIGNED CARRIER PHASES.", "NO FURTHER PHASE SHIFT APPLIED IN THE RINEX ENCODER."},
+			MarkerName: "BRUX", MarkerNumber: "13101M010", MarkerType: "GEODETIC",
+			Observer: "ROB", Agency: "ROB",
+			ReceiverNumber: "3001376", ReceiverType: "SEPT POLARX4TR", ReceiverVersion: "2.9.6",
+			AntennaNumber: "00464", AntennaType: "JAVRINGANT_DM   NONE",
+			Position:       Coord{X: 4027881.8478, Y: 306998.2610, Z: 4919498.6554},
+			AntennaDelta:   CoordNEU{Up: 0.4689, E: 0.0000, N: 0.0010},
+			Interval:       30.0,
+			TimeOfFirstObs: time.Date(2018, 11, 6, 19, 0, 0, 0, time.UTC), TimeOfLastObs: time.Date(2018, 11, 6, 19, 59, 30, 0, time.UTC),
+			GloSlots: map[gnss.PRN]int{{Sys: gnss.SysGLO, Num: 3}: 5, {Sys: gnss.SysGLO, Num: 4}: 6, {Sys: gnss.SysGLO, Num: 5}: 1,
+				{Sys: gnss.SysGLO, Num: 6}: -4, {Sys: gnss.SysGLO, Num: 13}: -2, {Sys: gnss.SysGLO, Num: 14}: -7, {Sys: gnss.SysGLO, Num: 15}: 0,
+				{Sys: gnss.SysGLO, Num: 16}: -1, {Sys: gnss.SysGLO, Num: 22}: -3, {Sys: gnss.SysGLO, Num: 23}: 3, {Sys: gnss.SysGLO, Num: 24}: 2},
+		},
+			wantW: headerW, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hdr := &ObsHeader{
+				RINEXVersion:    tt.fields.RINEXVersion,
+				RINEXType:       tt.fields.RINEXType,
+				SatSystem:       tt.fields.SatSystem,
+				Pgm:             tt.fields.Pgm,
+				RunBy:           tt.fields.RunBy,
+				Date:            tt.fields.Date,
+				Comments:        tt.fields.Comments,
+				MarkerName:      tt.fields.MarkerName,
+				MarkerNumber:    tt.fields.MarkerNumber,
+				MarkerType:      tt.fields.MarkerType,
+				Observer:        tt.fields.Observer,
+				Agency:          tt.fields.Agency,
+				ReceiverNumber:  tt.fields.ReceiverNumber,
+				ReceiverType:    tt.fields.ReceiverType,
+				ReceiverVersion: tt.fields.ReceiverVersion,
+				AntennaNumber:   tt.fields.AntennaNumber,
+				AntennaType:     tt.fields.AntennaType,
+				Position:        tt.fields.Position,
+				AntennaDelta:    tt.fields.AntennaDelta,
+				DOI:             tt.fields.DOI,
+				//Licenses:        tt.fields.License,
+				StationInfos: tt.fields.StationInfos,
+				//ObsTypes:           tt.fields.ObsTypes,
+				SignalStrengthUnit: tt.fields.SignalStrengthUnit,
+				Interval:           tt.fields.Interval,
+				TimeOfFirstObs:     tt.fields.TimeOfFirstObs,
+				TimeOfLastObs:      tt.fields.TimeOfLastObs,
+				GloSlots:           tt.fields.GloSlots,
+				LeapSeconds:        tt.fields.LeapSeconds,
+				NSatellites:        tt.fields.NSatellites,
+				Labels:             tt.fields.Labels,
+			}
+			w := &bytes.Buffer{}
+			if err := hdr.Write(w); (err != nil) != tt.wantErr {
+				t.Errorf("ObsHeader.Write() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if gotW := w.String(); gotW != tt.wantW {
+				t.Errorf("ObsHeader.Write() = %q, want %q", gotW, tt.wantW)
+			}
+		})
+	}
+}
+
+func TestObsHeader_writeObsCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		obsTypes map[gnss.System][]ObsCode
+		wantW    string
+	}{
+		{name: "t1-Gal", obsTypes: map[gnss.System][]ObsCode{
+			gnss.SysGAL: {"C1C", "L1C", "S1C", "C5Q", "L5Q", "S5Q", "C7Q", "L7Q", "S7Q", "C8Q", "L8Q", "S8Q"},
+		}, wantW: "E   12 C1C L1C S1C C5Q L5Q S5Q C7Q L7Q S7Q C8Q L8Q S8Q      SYS / # / OBS TYPES\n"},
+		{name: "t1-GPS", obsTypes: map[gnss.System][]ObsCode{
+			gnss.SysGPS: {"C1C", "L1C", "S1C", "C1W", "S1W", "C2W", "L2W", "S2W", "C2L", "L2L", "S2L", "C5Q", "L5Q", "S5Q"},
+		}, wantW: "G   14 C1C L1C S1C C1W S1W C2W L2W S2W C2L L2L S2L C5Q L5Q  SYS / # / OBS TYPES\n       S5Q                                                  SYS / # / OBS TYPES\n"},
+		{name: "t1-Glo", obsTypes: map[gnss.System][]ObsCode{
+			gnss.SysGLO: {"C1C", "L1C", "S1C", "C2P", "L2P", "S2P", "C2C", "L2C", "S2C", "C3Q", "L3Q", "S3Q"},
+		}, wantW: "R   12 C1C L1C S1C C2P L2P S2P C2C L2C S2C C3Q L3Q S3Q      SYS / # / OBS TYPES\n"},
+		{name: "t1-BDS", obsTypes: map[gnss.System][]ObsCode{
+			gnss.SysBDS: {"C2I", "L2I", "S2I", "C7I", "L7I", "S7I"},
+		}, wantW: "C    6 C2I L2I S2I C7I L7I S7I                              SYS / # / OBS TYPES\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &bytes.Buffer{}
+			hdr := &ObsHeader{
+				ObsTypes: tt.obsTypes,
+			}
+			hdr.writeObsCodes(w)
+			if gotW := w.String(); gotW != tt.wantW {
+				t.Errorf("ObsHeader.writeObsCodes() = %q, want %q", gotW, tt.wantW)
+			}
+		})
+	}
+}
+
+func TestObsHeader_formatFirstObsTime(t *testing.T) {
+	tests := []struct {
+		name string
+		ti   time.Time
+		want string
+	}{
+		{name: "t1", ti: time.Date(2018, 11, 6, 19, 0, 0, 0, time.UTC), want: "  2018    11     6    19     0    0.0000000"},
+		{name: "t2", ti: time.Date(2018, 11, 6, 19, 59, 30, 0, time.UTC), want: "  2018    11     6    19    59   30.0000000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hdr := &ObsHeader{}
+			if got := hdr.formatFirstObsTime(tt.ti); got != tt.want {
+				t.Errorf("ObsHeader.formatObsTime() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObsHeader_writeGloSlotsAndFreqs(t *testing.T) {
+	tests := []struct {
+		name     string
+		gloSlots map[gnss.PRN]int
+		wantW    string
+	}{
+		{name: "t1", gloSlots: map[gnss.PRN]int{{Sys: gnss.SysGLO, Num: 3}: 5, {Sys: gnss.SysGLO, Num: 4}: 6, {Sys: gnss.SysGLO, Num: 5}: 1,
+			{Sys: gnss.SysGLO, Num: 6}: -4, {Sys: gnss.SysGLO, Num: 13}: -2, {Sys: gnss.SysGLO, Num: 14}: -7, {Sys: gnss.SysGLO, Num: 15}: 0,
+			{Sys: gnss.SysGLO, Num: 16}: -1, {Sys: gnss.SysGLO, Num: 22}: -3, {Sys: gnss.SysGLO, Num: 23}: 3, {Sys: gnss.SysGLO, Num: 24}: 2},
+			wantW: " 11 R03  5 R04  6 R05  1 R06 -4 R13 -2 R14 -7 R15  0 R16 -1 GLONASS SLOT / FRQ #\n    R22 -3 R23  3 R24  2                                    GLONASS SLOT / FRQ #\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hdr := &ObsHeader{
+				GloSlots: tt.gloSlots,
+			}
+			w := &bytes.Buffer{}
+			hdr.writeGloSlotsAndFreqs(w)
+			if gotW := w.String(); gotW != tt.wantW {
+				t.Errorf("ObsHeader.writeGloSlotsAndFreqs() = %q, want %q", gotW, tt.wantW)
+			}
+		})
+	}
+}

@@ -14,6 +14,27 @@ import (
 	"github.com/de-bkg/gognss/pkg/gnss"
 )
 
+// siteNameRegex is the compiled regex for a 9char site name.
+var siteNameRegex = regexp.MustCompile(`(?i)([A-Z0-9]{4})(\d)(\d)([A-Z]{3})`)
+
+// IDByFilename extracts the siteID (usually nineCharID) from a IGS sitelog filename.
+// The returned value is upper case. On failure an empty string is returned.
+// The filename must comply to the IGS conventions, that means e.g.
+// "wtzr00deu_20231030.log" or the deprecated short name "wtzr_20231030.log".
+func IDByFilename(filename string) string {
+	filename = strings.TrimSpace(filename)
+
+	if len(filename) == 17 { // old name
+		return strings.ToUpper(filename[:4])
+	}
+
+	res := siteNameRegex.FindStringSubmatch(filename)
+	if res == nil || len(res) < 1 {
+		return ""
+	}
+	return strings.ToUpper(res[0])
+}
+
 var (
 	// main block. e.g. '1.   Site Identification of the GNSS Monument'
 	blockPattern = regexp.MustCompile(`^(\d+)\.\s+([\w\s]+)`)
@@ -264,7 +285,7 @@ func DecodeSitelog(r io.Reader) (*Site, error) {
 				location.City = val
 			case "State or Province":
 				location.State = val
-			case "Country": // deprecated, use "Country or Region"
+			case "Country": // Deprecated, use "Country or Region"
 				location.Country = val
 			case "Country or Region":
 				if len(val) == 3 {
@@ -338,10 +359,13 @@ func DecodeSitelog(r io.Reader) (*Site, error) {
 			switch key {
 			case "Satellite System":
 				//assertNotNull()
-				if recv.SatSystems, err = parseSatSystems(val); err != nil {
+				if recv.SatSystems, err = gnss.ParseSatSystems(val); err != nil {
 					return nil, parseError()
 				}
 			case "Serial Number":
+				if len(val) > 20 {
+					site.Warnings = append(site.Warnings, fmt.Errorf("%s too long: %q", "Rec Serial Number", val))
+				}
 				recv.SerialNum = val
 			case "Firmware Version":
 				recv.Firmware = val
@@ -392,6 +416,9 @@ func DecodeSitelog(r io.Reader) (*Site, error) {
 
 			switch key {
 			case "Serial Number":
+				if len(val) > 20 {
+					site.Warnings = append(site.Warnings, fmt.Errorf("%s too long: %q", "Ant Serial Number", val))
+				}
 				ant.SerialNum = val
 			case "Antenna Reference Point":
 				ant.ReferencePoint = val
@@ -806,21 +833,11 @@ func DecodeSitelog(r io.Reader) (*Site, error) {
 			// 12. Responsible Agency (if different from 11.)
 
 			if strings.HasPrefix(key, "11.") || strings.HasPrefix(key, "12.") {
-				/* 				localEpiEff = LocalEpisodicEffect{}
-				   				if localEpiEff.EffectiveDates, err = parseEffectiveDates(val); err != nil {
-				   					return nil, parseError()
-				   				}
-				   				// check if block is unique
-				   				subBlock = strings.Fields(key)[0]
-				   				if _, ok := blocks[subBlock]; ok {
-				   					return nil, fmt.Errorf("Local Episodic Effect block exists twice: %q", subBlock)
-				   				}
-				   				blocks[subBlock] = 1 */
 				continue
 			}
 
 			if strings.Contains(line, "Secondary Contact") {
-				// store Primary Contact
+				// now store Primary Contact
 				if blockNumber == 11 {
 					site.Contacts = append(site.Contacts, Contact{Party: party})
 				} else { // 12
@@ -1013,34 +1030,6 @@ func printSitelogDate(t time.Time) string {
 		return "(CCYY-MM-DD)"
 	}
 	return t.Format(time.DateOnly)
-}
-
-var sysPerAbbr = map[string]gnss.System{
-	"GPS":   gnss.SysGPS,
-	"GLO":   gnss.SysGLO,
-	"GAL":   gnss.SysGAL,
-	"QZSS":  gnss.SysQZSS,
-	"BDS":   gnss.SysBDS,
-	"IRNSS": gnss.SysNavIC,
-	"NavIC": gnss.SysNavIC,
-	"SBAS":  gnss.SysSBAS,
-}
-
-func parseSatSystems(s string) (gnss.Systems, error) {
-	r := strings.NewReplacer("/", "+", "GLONASS", "GLO", "GALILEO", "GAL", "BEIDOU", "BDS", "IRNSS", "NavIC")
-	s = r.Replace(s)
-
-	sysList := make([]gnss.System, 0, 5)
-
-	systems := strings.Split(s, "+")
-	for _, sys := range systems {
-		if _, exists := sysPerAbbr[sys]; !exists {
-			return nil, fmt.Errorf("invalid satellite system: %q", sys)
-		}
-		sysList = append(sysList, sysPerAbbr[sys])
-	}
-
-	return sysList, nil
 }
 
 // Notes often have multiple lines

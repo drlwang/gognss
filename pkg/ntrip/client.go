@@ -25,19 +25,22 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/de-bkg/gognss/pkg/gnss"
 )
 
 // yml config: https://github.com/valasek/timesheet/tree/master/server
 
 // Options provides additional information for connecting to a Ntripcaster.
 type Options struct {
-	// Username is the Caster username
+	// Username is the Caster username. Env "CAS_USER".
 	Username string
 
-	// Password is the Caster password
+	// Password is the Caster password. Env "CAS_PW".
 	Password string
 
 	// Proxy configures the Proxy function on the HTTP client.
@@ -67,6 +70,20 @@ type Options struct {
 	//ErrorChan chan error //  errorChan := make(chan error)
 }
 
+func (opts *Options) getUsername() string {
+	if opts.Username != "" {
+		return opts.Username
+	}
+	return os.Getenv("CAS_USER")
+}
+
+func (opts *Options) getPW() string {
+	if opts.Password != "" {
+		return opts.Password
+	}
+	return os.Getenv("CAS_PW")
+}
+
 // Client is a caster client for http connections.
 // The http.Client's Transport typically has internal state (cached TCP connections), so Clients should be reused
 // instead of created as needed. Clients are safe for concurrent use by multiple goroutines.
@@ -86,8 +103,7 @@ type Client struct {
 
 // NewClient returns a new Ntrip Client with the given caster address and additional options.
 // The caster addr should have the form "http://host:port". It uses HTTP proxies
-// as directed by the $HTTP_PROXY and $NO_PROXY (or $http_proxy and
-// $no_proxy) environment variables.
+// as directed by the $HTTP_PROXY and $NO_PROXY (or $http_proxy and $no_proxy) environment variables.
 func NewClient(addr string, opts Options) (*Client, error) {
 	casterURL, err := url.Parse(addr)
 	if err != nil {
@@ -130,8 +146,8 @@ func NewClient(addr string, opts Options) (*Client, error) {
 			//Transport: tr, // see http DefaultTransport settings
 		},
 		URL:       casterURL,
-		Username:  opts.Username,
-		Password:  opts.Password,
+		Username:  opts.getUsername(),
+		Password:  opts.getPW(),
 		Useragent: opts.UserAgent,
 	}, nil
 }
@@ -139,17 +155,17 @@ func NewClient(addr string, opts Options) (*Client, error) {
 // IsCasterAlive checks whether the caster is alive.
 // This is done by checking if the caster responds with its sourcetable.
 func (c *Client) IsCasterAlive() bool {
-	if _, err := c.GetSourcetable(); err != nil {
+	if _, _, err := c.GetSourcetable(); err != nil {
 		return false
 	}
 	return true
 }
 
-// GetSourcetable downloads the sourcetable and returns the contents.
-func (c *Client) GetSourcetable() (io.ReadCloser, error) {
+// GetSourcetable downloads the raw sourcetable and returns the contents.
+func (c *Client) GetSourcetable() (io.ReadCloser, http.Header, error) {
 	req, err := http.NewRequest("GET", c.URL.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	req.Header.Add("Ntrip-Version", "Ntrip/2.0")
@@ -158,7 +174,7 @@ func (c *Client) GetSourcetable() (io.ReadCloser, error) {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Debug
@@ -176,29 +192,32 @@ func (c *Client) GetSourcetable() (io.ReadCloser, error) {
 
 	if resp.StatusCode != http.StatusOK { // / if resp.Status != "200 OK"
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET failed: %d (%s)", resp.StatusCode, resp.Status)
+		return nil, resp.Header, fmt.Errorf("GET failed: %d (%s)", resp.StatusCode, resp.Status)
 	}
 
 	if resp.Header.Get("Content-Type") != "gnss/sourcetable" {
 		resp.Body.Close()
-		return nil, fmt.Errorf("sourcetable %s with content-type %s", c.URL.String(), resp.Header.Get("Content-Type"))
+		return nil, resp.Header, fmt.Errorf("sourcetable %s with content-type %s", c.URL.String(), resp.Header.Get("Content-Type"))
 	}
 
-	return resp.Body, nil
+	return resp.Body, resp.Header, nil
 }
 
 // ParseSourcetable downloads the sourcetable and parses its contents.
+// We assume that CAS and NET records are listed at the beginning of the sourcetable, before the streams.
 func (c *Client) ParseSourcetable() (*Sourcetable, error) {
-	reader, err := c.GetSourcetable()
+	reader, header, err := c.GetSourcetable()
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	st := &Sourcetable{}
+	st := &Sourcetable{Header: header}
 	st.Casters = make([]Caster, 0, 5)
 	st.Networks = make([]Network, 0, 5)
+	st.netmap = make(map[string]*Network, 5)
 	st.Streams = make([]Stream, 0, 200)
+
 	scanner := bufio.NewScanner(reader)
 	ln := ""
 readln:
@@ -210,15 +229,15 @@ readln:
 		fields := strings.Split(ln, ";")
 		switch fields[0] {
 		case "CAS":
-			if ca, err := parseCAS(ln); err == nil {
+			if ca, err := st.parseCAS(ln); err == nil {
 				st.Casters = append(st.Casters, ca)
 			}
 		case "NET":
-			if netw, err := parseNET(ln); err == nil {
+			if netw, err := st.parseNET(ln); err == nil {
 				st.Networks = append(st.Networks, netw)
 			}
 		case "STR":
-			if str, err := parseSTR(ln); err == nil {
+			if str, err := st.parseSTR(ln); err == nil {
 				st.Streams = append(st.Streams, str)
 			}
 		case "ENDSOURCETABLE":
@@ -226,8 +245,6 @@ readln:
 		default:
 			return nil, fmt.Errorf("%s: illegal sourcetable line: '%s'", c.URL.String(), ln)
 		}
-
-		//fmt.Println(ln)
 	}
 
 	if ln != "ENDSOURCETABLE" {
@@ -315,61 +332,70 @@ func (c *Client) Reconnect() (io.ReadCloser, error) {
 	return c.do()
 }
 
-// Caster specifies a sourcetable record for a caster.
-// See http://software.rtcm-ntrip.org/wiki/CAS.
+// Caster describes a NtripCaster instance.
+// See https://software.rtcm-ntrip.org/wiki/CAS.
 type Caster struct {
-	Host         string  // host name or IP address
-	Port         int     // numeric port number
-	Identifier   string  // Name of Caster or Caster provider
-	Operator     string  // Name of institution or company operating the caster
-	Nmea         bool    // Caster accepts NMEA input (1, true) or not (0)
-	Country      string  // 3 char ISO 3166 country code
-	Lat, Lon     float32 // Position, Latitude and Longitude in degree
-	FallbackHost string  // Fallback Caster Internet address
-	FallbackPort int     // Fallback Caster Port number
-	Misc         string  // Miscellaneous information
+	Host         string  `json:"host"`         // host name or IP address
+	Port         int     `json:"port"`         // numeric port number
+	Identifier   string  `json:"identifier"`   // Name of Caster or Caster provider
+	Operator     string  `json:"operator"`     // Name of institution or company operating the caster
+	Nmea         bool    `json:"nmea"`         // Caster accepts NMEA input (1, true) or not (0)
+	Country      string  `json:"country"`      // 3 char ISO 3166 country code
+	Lat          float64 `json:"lat"`          // Position, Latitude in degree
+	Lon          float64 `json:"lon"`          // Position, Longitude in degree
+	FallbackHost string  `json:"fallbackHost"` // Fallback Caster Internet address
+	FallbackPort int     `json:"fallbackPort"` // Fallback Caster Port number
+	Misc         string  `json:"misc"`         // Miscellaneous information
+	NtripVersion string  `json:"ntripVersion"` // The Ntrip version returned by the header, e.g. "Ntrip/2.0"
+	NtripFlags   string  `json:"ntripFlags"`   // Ntrip flags like st_filter, st_auth etc.
+	NtripServer  string  `json:"ntripServer"`  // The NtripCasters name and version returned by the header, e.g. "NTRIP BKG Caster/2.0.45"
 }
 
 // Network specifies a sourcetable record for a network.
-// See http://software.rtcm-ntrip.org/wiki/NET.
+// See https://software.rtcm-ntrip.org/wiki/NET.
 type Network struct {
-	Identifier string //  Network Identifier
-	Operator   string //  Name of institution or company operating the network
-	Auth       string // access protection for data streams: None (N), Basic (B) or Digest (D)
-	Fee        bool   // User fee for data access: yes (Y) or no (N)
-	WebNet     string // URL, Web address for network information
-	WebStream  string // URL, Web address for stream information
-	WebReg     string // URL or e-mail, Web or mail address for registration
-	Misc       string // Miscellaneous information
+	Identifier string   `json:"identifier"` //  Network Identifier
+	Operator   string   `json:"operator"`   //  Name of institution or company operating the network
+	Auth       string   `json:"auth"`       // access protection for data streams: None (N), Basic (B) or Digest (D)
+	Fee        bool     `json:"fee"`        // User fee for data access: yes (Y) or no (N)
+	WebNet     *url.URL `json:"webNet"`     // Web address for network information
+	WebStream  *url.URL `json:"webStream"`  // Web address for stream information
+	WebReg     string   `json:"webReg"`     // Web or mail address for registration
+	Misc       string   `json:"misc"`       // Miscellaneous information
 }
 
 // Stream specifies a sourcetable record for a stream.
-// See http://software.rtcm-ntrip.org/wiki/STR.
+// See https://software.rtcm-ntrip.org/wiki/STR.
 type Stream struct {
-	MP            string   // datastream mountpoint name
-	Identifier    string   // Source identifier (most time nearest city)
-	Format        string   //  Data format (see http://software.rtcm-ntrip.org/wiki/STR)
-	FormatDetails string   // Specifics of data format (see http://software.rtcm-ntrip.org/wiki/STR)
-	Carrier       int      // Phase information (see http://software.rtcm-ntrip.org/wiki/STR)
-	SatSystem     []string // satellite navigation system (see http://software.rtcm-ntrip.org/wiki/STR)
-	Network       string   // network name (Network.Identifier)
-	Country       string   // 3 char ISO 3166 country code
-	Lat, Lon      float32  // Position, Latitude and Longitude in degree
-	Nmea          bool     // Caster accepts NMEA input (1, true) or not (0)
-	Solution      int      // Generated by single base (0) or network (1)
-	Generator     string   // Generating soft- or hardware
-	Compression   string   // Compression algorithm
-	Auth          string   // access protection for data streams: None (N), Basic (B) or Digest (D)
-	Fee           bool     // User fee for data access: yes (Y) or no (N)
-	Bitrate       int      // Datarate in bits per second
-	Misc          string   // Miscellaneous information
+	MP            string       `json:"mountpoint"`    // datastream mountpoint name
+	Identifier    string       `json:"identifier"`    // Source identifier (most time nearest city)
+	Format        string       `json:"format"`        // Data format
+	FormatDetails string       `json:"formatDetails"` // Specifics of data format
+	Carrier       int          `json:"carrier"`       // Phase information
+	SatSystem     gnss.Systems `json:"satSystems"`    // satellite navigation systems
+	Network       *Network     `json:"network"`       // This stream belongs to that network.
+	Country       string       `json:"country"`       // 3 char ISO 3166 country code
+	Lat           float64      `json:"lat"`           // Position, Latitude in degree
+	Lon           float64      `json:"lon"`           // Position, Longitude in degree
+	Nmea          bool         `json:"nmea"`          // Caster accepts NMEA input (1, true) or not (0)
+	Solution      int          `json:"solution"`      // Generated by single base (0) or network (1)
+	Generator     string       `json:"generator"`     // Generating soft- or hardware
+	Compression   string       `json:"compression"`   // Compression algorithm
+	Auth          string       `json:"auth"`          // access protection for data streams: None (N), Basic (B) or Digest (D)
+	Fee           bool         `json:"fee"`           // User fee for data access: yes (Y) or no (N)
+	Bitrate       int          `json:"bitrate"`       // Datarate in bits per second
+	Misc          string       `json:"misc"`          // Miscellaneous information
 }
 
 // Sourcetable holds the streams from an NtripCasters' sourcetable.
 type Sourcetable struct {
-	Casters  []Caster
-	Networks []Network
-	Streams  []Stream
+	Casters  []Caster  // The caster records. Often there exist multiple caster records, from related casters.
+	Networks []Network // The network records. Each stream must have an assigned network.
+	Streams  []Stream  // The Ntrip streams.
+
+	Header http.Header // The HTTP response header containing "Ntrip-Version", "Ntrip-Flags" and "Server".
+
+	netmap map[string]*Network
 }
 
 // Write writes a RTCM formated sourcetable to the specified writer.
@@ -386,7 +412,7 @@ func (st *Sourcetable) Write(w io.Writer) error {
 
 	for _, str := range st.Streams {
 		fmt.Fprintf(w, "%s;%s;%s;%s;%s;%d;%s;%s;%s;%.2f;%.2f;%d;%d;%s;%s;%s;%s;%d;%s\n",
-			"STR", str.MP, str.Identifier, str.Format, str.FormatDetails, str.Carrier, strings.Join(str.SatSystem, "+"), str.Network,
+			"STR", str.MP, str.Identifier, str.Format, str.FormatDetails, str.Carrier, str.SatSystem, str.Network.Identifier,
 			str.Country, str.Lat, str.Lon, printNMEA(str.Nmea), str.Solution, str.Generator, str.Compression, str.Auth, printFee(str.Fee), str.Bitrate, str.Misc)
 	}
 
@@ -409,7 +435,7 @@ func (st *Sourcetable) HasStream(mountpoint string) (Stream, bool) {
 }
 
 // parseCAS parses a CAS sourcetable line.
-func parseCAS(line string) (Caster, error) {
+func (st *Sourcetable) parseCAS(line string) (Caster, error) {
 	fields := strings.Split(line, ";")
 	if len(fields) < 12 {
 		return Caster{}, fmt.Errorf("missing fields at caster line: %s", line)
@@ -436,12 +462,12 @@ func parseCAS(line string) (Caster, error) {
 	}
 
 	return Caster{Host: fields[1], Port: port, Identifier: fields[3], Operator: fields[4],
-		Nmea: nmea, Country: fields[6], Lat: float32(lat), Lon: float32(lon), FallbackHost: fields[9],
+		Nmea: nmea, Country: fields[6], Lat: lat, Lon: lon, FallbackHost: fields[9],
 		FallbackPort: fbPort, Misc: fields[11]}, nil
 }
 
 // parseNET parses a NET sourcetable line.
-func parseNET(line string) (Network, error) {
+func (st *Sourcetable) parseNET(line string) (Network, error) {
 	fields := strings.Split(line, ";")
 	if len(fields) < 9 {
 		return Network{}, fmt.Errorf("missing fields at network line: %s", line)
@@ -452,12 +478,28 @@ func parseNET(line string) (Network, error) {
 		fee = true
 	}
 
-	return Network{Identifier: fields[1], Operator: fields[2], Auth: fields[3], Fee: fee,
-		WebNet: fields[5], WebStream: fields[6], WebReg: fields[7], Misc: fields[8]}, nil
+	webNet, err := url.Parse(fields[5])
+	if err != nil {
+		return Network{}, fmt.Errorf("%q: no valid URL in line: %s", fields[5], line)
+	}
+
+	webStr, err := url.Parse(fields[6])
+	if err != nil {
+		return Network{}, fmt.Errorf("%q: no valid URL in line: %s", fields[5], line)
+	}
+
+	nw := Network{Identifier: fields[1], Operator: fields[2], Auth: fields[3], Fee: fee,
+		WebNet: webNet, WebStream: webStr, WebReg: fields[7], Misc: fields[8]}
+
+	if _, exists := st.netmap[fields[1]]; !exists {
+		st.netmap[fields[1]] = &nw
+	}
+
+	return nw, nil
 }
 
 // parseSTR parses a STR sourcetable line.
-func parseSTR(line string) (Stream, error) {
+func (st *Sourcetable) parseSTR(line string) (Stream, error) {
 	fields := strings.Split(line, ";")
 	if len(fields) < 19 {
 		return Stream{}, fmt.Errorf("missing fields at stream line: %s", line)
@@ -468,7 +510,10 @@ func parseSTR(line string) (Stream, error) {
 		return Stream{}, fmt.Errorf("parsing the streams carrier in line: %s", line)
 	}
 
-	satSystems := strings.Split(fields[6], "+")
+	satSystems, err := parseSatSystems(fields[6])
+	if err != nil {
+		return Stream{}, err
+	}
 
 	lat, err := strconv.ParseFloat(fields[9], 32)
 	if err != nil {
@@ -494,14 +539,20 @@ func parseSTR(line string) (Stream, error) {
 		fee = true
 	}
 
+	nwName := fields[7]
+	nw, exists := st.netmap[nwName]
+	if !exists {
+		return Stream{}, fmt.Errorf("network not defined: %q: line: %s", nwName, line)
+	}
+
 	bitrate, err := strconv.Atoi(fields[17])
 	if err != nil {
 		return Stream{}, fmt.Errorf("parsing the streams carrier in line: %s", line)
 	}
 
 	return Stream{MP: fields[1], Identifier: fields[2], Format: fields[3], FormatDetails: fields[4],
-		Carrier: carrier, SatSystem: satSystems, Network: fields[7], Country: fields[8],
-		Lat: float32(lat), Lon: float32(lon), Nmea: nmea, Solution: sol, Generator: fields[13],
+		Carrier: carrier, SatSystem: satSystems, Network: nw, Country: fields[8],
+		Lat: lat, Lon: lon, Nmea: nmea, Solution: sol, Generator: fields[13],
 		Compression: fields[14], Auth: fields[15], Fee: fee, Bitrate: bitrate, Misc: fields[18]}, nil
 }
 
@@ -550,4 +601,21 @@ func printNMEA(nmea bool) int {
 		return 1
 	}
 	return 0
+}
+
+func parseSatSystems(s string) (gnss.Systems, error) {
+	r := strings.NewReplacer("/", "+", "GLONASS", "GLO", "GALILEO", "GAL", "BEIDOU", "BDS", "IRNSS", "NavIC")
+	s = r.Replace(s)
+
+	systems := strings.Split(s, "+")
+	sysList := make([]gnss.System, 0, len(systems))
+	for _, sys := range systems {
+		if ms, exists := gnss.ByAbbr[sys]; exists {
+			sysList = append(sysList, ms)
+		} else {
+			return nil, fmt.Errorf("invalid satellite system: %q", sys)
+		}
+	}
+
+	return sysList, nil
 }

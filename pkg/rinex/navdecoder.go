@@ -72,7 +72,6 @@ readln:
 		if dec.lineNum == 1 {
 			if !strings.Contains(line, "RINEX VERSION / TYPE") {
 				err = ErrNoHeader
-				return
 			}
 		}
 		if dec.lineNum > maxLines {
@@ -120,7 +119,7 @@ readln:
 
 			// version >= 3:
 			s := strings.TrimSpace(val[40:41])
-			if sys, ok := sysPerAbbr[s]; ok {
+			if sys, ok := gnss.ByAbbr[s]; ok {
 				hdr.SatSystem = sys
 			} else {
 				return hdr, fmt.Errorf("read RINEX-3 header: invalid satellite system: %s", s)
@@ -140,6 +139,19 @@ readln:
 			}
 		case "COMMENT":
 			hdr.Comments = append(hdr.Comments, strings.TrimSpace(val))
+		case "MERGED FILE":
+			nStr := strings.TrimSpace(val[:9])
+			if nStr != "" {
+				n, err := strconv.Atoi(nStr)
+				if err != nil {
+					return hdr, fmt.Errorf("parse %q: %v", key, err)
+				}
+				hdr.MergedFiles = n
+			}
+		case "DOI":
+			hdr.DOI = strings.TrimSpace(val)
+		case "LICENSE OF USE":
+			hdr.Licenses = append(hdr.Licenses, strings.TrimSpace(val))
 		case "IONOSPHERIC CORR":
 			// TODO
 		case "TIME SYSTEM CORR":
@@ -155,11 +167,10 @@ readln:
 		}
 	}
 
-	if hdr.RINEXVersion == 0 {
-		return hdr, fmt.Errorf("unknown RINEX Version")
+	if err := dec.sc.Err(); err != nil {
+		return hdr, err
 	}
 
-	err = dec.sc.Err()
 	return hdr, err
 }
 
@@ -217,7 +228,7 @@ func (dec *NavDecoder) nextEphemerisv3() bool {
 			continue
 		}
 
-		sys, ok := sysPerAbbr[line[:1]]
+		sys, ok := gnss.ByAbbr[line[:1]]
 		if !ok {
 			dec.setErr(fmt.Errorf("rinex: line %d: invalid satellite system: %q", dec.lineNum, line[:1]))
 			return false
@@ -257,7 +268,7 @@ func (dec *NavDecoder) nextEphemerisv4() bool {
 
 		rectyp := line[2:5]
 		if rectyp == string(NavRecordTypeEPH) {
-			sys, ok := sysPerAbbr[line[6:7]]
+			sys, ok := gnss.ByAbbr[line[6:7]]
 			if !ok {
 				dec.setErr(fmt.Errorf("rinex: invalid satellite system in: %q (line %d)", line, dec.lineNum))
 				return false

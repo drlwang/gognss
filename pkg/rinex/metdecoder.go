@@ -95,7 +95,7 @@ readln:
 		case "DOI":
 			hdr.DOI = strings.TrimSpace(val)
 		case "LICENSE OF USE":
-			hdr.License = strings.TrimSpace(val)
+			hdr.Licenses = append(hdr.Licenses, strings.TrimSpace(val))
 		case "STATION INFORMATION":
 			hdr.StationInfos = append(hdr.StationInfos, strings.TrimSpace(val))
 		case "# / TYPES OF OBSERV":
@@ -145,11 +145,10 @@ readln:
 		}
 	}
 
-	if hdr.RINEXVersion == 0 {
-		return hdr, fmt.Errorf("unknown RINEX Version")
+	if err := dec.sc.Err(); err != nil {
+		return hdr, err
 	}
 
-	err = dec.sc.Err()
 	return hdr, err
 }
 

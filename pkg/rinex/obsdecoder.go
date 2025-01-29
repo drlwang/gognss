@@ -58,7 +58,6 @@ readln:
 		if dec.lineNum == 1 {
 			if !strings.Contains(line, "RINEX VERS") { // "CRINEX VERS   / TYPE" or "RINEX VERSION / TYPE"
 				err = ErrNoHeader
-				return
 			}
 		}
 
@@ -79,11 +78,10 @@ readln:
 				return hdr, fmt.Errorf("parse RINEX VERSION: %v", err)
 			}
 			hdr.RINEXType = strings.TrimSpace(val[20:21])
-			if sys, ok := sysPerAbbr[strings.TrimSpace(val[40:41])]; ok {
+			if sys, ok := gnss.ByAbbr[strings.TrimSpace(val[40:41])]; ok {
 				hdr.SatSystem = sys
 			} else {
-				err = fmt.Errorf("read header: invalid satellite system in line %d: %s", dec.lineNum, line)
-				return
+				return hdr, fmt.Errorf("read header: invalid satellite system in line %d: %s", dec.lineNum, line)
 			}
 		case "PGM / RUN BY / DATE":
 			// Additional lines of this type can appear together after the second line, if needed to preserve the history of previous actions on the file.
@@ -151,9 +149,8 @@ readln:
 				sys = rememberSys
 			} else {
 				ok := false
-				if sys, ok = sysPerAbbr[val[:1]]; !ok {
-					err = fmt.Errorf("read header: invalid satellite system: %q: line %d", val[:1], dec.lineNum)
-					return
+				if sys, ok = gnss.ByAbbr[val[:1]]; !ok {
+					return hdr, fmt.Errorf("read header: invalid satellite system: %q: line %d", val[:1], dec.lineNum)
 				}
 				rememberSys = sys
 				nTypes, err := strconv.Atoi(strings.TrimSpace(val[3:6]))
@@ -175,6 +172,10 @@ readln:
 			}
 			obscodes := convStringsToObscodes(strings.Fields(val[7:]))
 			hdr.ObsTypes[sys] = append(hdr.ObsTypes[sys], obscodes...)
+		case "DOI":
+			hdr.DOI = strings.TrimSpace(val)
+		case "LICENSE OF USE":
+			hdr.Licenses = append(hdr.Licenses, strings.TrimSpace(val))
 		case "SIGNAL STRENGTH UNIT":
 			hdr.SignalStrengthUnit = strings.TrimSpace(val[:20])
 		case "INTERVAL":
@@ -243,11 +244,7 @@ readln:
 		}
 	}
 
-	if hdr.RINEXVersion == 0 {
-		return hdr, fmt.Errorf("unknown RINEX Version")
-	}
-
-	if err = dec.sc.Err(); err != nil {
+	if err := dec.sc.Err(); err != nil {
 		return hdr, err
 	}
 
@@ -472,7 +469,7 @@ readln:
 				continue
 			}
 
-			sys := sysPerAbbr[line[:1]]
+			sys := gnss.ByAbbr[line[:1]]
 			ntypes := len(dec.Header.ObsTypes[sys])
 			obsPerTyp := make(map[ObsCode]Obs, ntypes)
 			for ityp, typ := range dec.Header.ObsTypes[sys] {
